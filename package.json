@@ -9,7 +9,7 @@
     "start": "node pair.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "github:cheekydavy/mbuvi-baileys",
+    "@whiskeysockets/baileys": "^6.6.0",
     "maher-zubair-baileys": "^6.6.5",
     "qrcode": "^1.5.3",
     "awesome-phonenumber": "^2.64.0",
