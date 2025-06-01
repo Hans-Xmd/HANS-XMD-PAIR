@@ -1,110 +1,88 @@
 const express = require('express');
 const fs = require('fs');
-let router = express.Router();
-const pino = require("pino");
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    delay,
-    makeCacheableSignalKeyStore
-} = require("@whiskeysockets/baileys");
+const path = require('path');
+const pino = require('pino');
+const { default: Baileys, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, Browsers } = require('@whiskeysockets/baileys');
+const { makeid } = require('./id');
+
+const router = express.Router();
 
 function removeFile(FilePath) {
-    if (!fs.existsSync(FilePath)) return false;
+    if (!fs.existsSync(FilePath)) return;
     fs.rmSync(FilePath, { recursive: true, force: true });
 }
 
+function buildSession(sessionDir) {
+    const creds = JSON.parse(fs.readFileSync(path.join(sessionDir, 'creds.json'), 'utf-8'));
+    delete creds.lastPropHash;
+    return JSON.stringify(creds);
+}
+
 router.get('/', async (req, res) => {
+    const id = makeid();
     let num = req.query.number;
 
-    async function HansPair() {
-        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
+    async function pair() {
+        const { state, saveCreds } = await useMultiFileAuthState('./temp/' + id);
         try {
-            let HansTzInc = makeWASocket({
+            const conn = Baileys({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }))
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-                browser: ["Ubuntu", "Chrome", "20.0.04"],
+                logger: pino({ level: 'fatal' }),
+                browser: Browsers.macOS('Chrome')
             });
 
-            if (!HansTzInc.authState.creds.registered) {
+            if (!conn.authState.creds.registered) {
                 await delay(1500);
                 num = num.replace(/[^0-9]/g, '');
-                const code = await HansTzInc.requestPairingCode(num);
-                if (!res.headersSent) {
-                    await res.send({ code });
-                }
+                const code = await conn.requestPairingCode(num);
+                if (!res.headersSent) res.send({ code });
             }
 
-            HansTzInc.ev.on('creds.update', saveCreds);
-            HansTzInc.ev.on("connection.update", async (s) => {
-                const { connection, lastDisconnect } = s;
-                if (connection == "open") {
+            conn.ev.on('creds.update', saveCreds);
+            conn.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+                if (connection === 'open') {
+                    await delay(3000);
+                    const sessionCode = buildSession(`./temp/${id}`);
+
+                    await conn.sendMessage(conn.user.id, { text: sessionCode });
+
+                    const instructions = `
+> ✅ Successfully Connected
+
+> 📁 Create a folder named "sessions"
+
+> 💾 Save this session code as creds.json inside it
+
+> 🔁 BOT REPO FORK: https://github.com/Mrhanstz/HANS-XMD_V2/fork
+
+> 📣 WHATSAPP CHANNEL: https://whatsapp.com/channel/0029VasiOoR3bbUw5aV4qB31
+
+> 🧠 MY GITHUB: https://github.com/Mrhanstz`;
+
+                    await conn.sendMessage(conn.user.id, { text: instructions });
+
+                    await delay(500);
+                    await conn.ws.close();
+                    removeFile('./temp/' + id);
+                } else if (connection === 'close' && lastDisconnect?.error?.output?.statusCode !== 401) {
                     await delay(10000);
-
-                    const fullCreds = fs.readFileSync('./session/creds.json', 'utf-8');
-                    const parsed = JSON.parse(fullCreds);
-                    delete parsed.lastPropHash;
-
-                    const formattedCreds = `${JSON.stringify(parsed)}`;
-
-                    HansTzInc.groupAcceptInvite("Kjm8rnDFcpb04gQNSTbW2d");
-
-                    const Hansses = await HansTzInc.sendMessage(HansTzInc.user.id, {
-                        text: formattedCreds
-                    });
-
-                    await HansTzInc.sendMessage(HansTzInc.user.id, {
-                        text: `
-> Successfully Connected 
-
-> Put On Folder 📁 sessions 
-
-> Then on creds.json 🤞 paste you session code
-
-> BOT REPO FORK 
-> https://github.com/Mrhanstz/HANS-XMD_V2/fork
-
-> FOLLOW MY WHATSAPP CHANNEL 
-> https://whatsapp.com/channel/0029VasiOoR3bbUw5aV4qB31
-
-> FOLLOW MY GIT
-> https://github.com/Mrhanstz`
-                    }, { quoted: Hansses });
-
-                    await delay(100);
-                    await removeFile('./session');
-                    process.exit(0);
-                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-                    await delay(10000);
-                    HansPair();
+                    pair();
                 }
             });
         } catch (err) {
-            console.log("service restated");
-            await removeFile('./session');
+            console.error('Pairing Error:', err);
+            removeFile('./temp/' + id);
             if (!res.headersSent) {
-                await res.send({ code: "Service Unavailable" });
+                res.send({ code: 'Service Currently Unavailable' });
             }
         }
     }
 
-    return await HansPair();
-});
-
-process.on('uncaughtException', function (err) {
-    let e = String(err);
-    if (e.includes("conflict")) return;
-    if (e.includes("Socket connection timeout")) return;
-    if (e.includes("not-authorized")) return;
-    if (e.includes("rate-overlimit")) return;
-    if (e.includes("Connection Closed")) return;
-    if (e.includes("Timed Out")) return;
-    if (e.includes("Value not found")) return;
-    console.log('Caught exception: ', err);
+    await pair();
 });
 
 module.exports = router;
